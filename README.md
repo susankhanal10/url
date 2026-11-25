@@ -35,4 +35,19 @@ Localhost has no public IP, so fake one:
 ## Extra features (v2)
 Overview dashboard, dark mode, custom short names, link expiry, on/off switch, QR codes, search/sort/filter,
 redirect-delay slider, CSV export, device/browser/referrer breakdowns.
-Run `npm install` again in both folders (a new package `qrcode` was added to the client).
+
+
+## New in v3
+- **Real IP address** for every click (reads Cloudflare / proxy headers). On localhost it uses your network's public IP, shown with a "local test" tag.
+- **Country flag, city, region, ISP, coordinates and timezone** per visitor (ipwho.is, with the offline geoip-lite database as a fallback)
+- **Brand logos** for device (Apple, Samsung, Xiaomi...), operating system and browser
+- **Visitor map** (Leaflet) on the overview and on every link, with live updates
+- **Click details window**: click any row to see everything about that visit
+- Unique visitors, top cities, busiest hours, live activity feed, search/filter in the click table
+- **Professional short links**: short readable codes (6 characters, no look-alike letters), a branded redirect page showing the destination, polished 404/expired pages, "link ready" card with copy / open / QR / share
+- Rate-limited login, central error handler (a database error no longer crashes the server)
+
+## Making links look professional
+Set `BASE_URL` in `server/.env` to your own short domain, e.g. `BASE_URL=https://lnk.yourname.com`, and `CLIENT_URL` to your dashboard address.
+
+Run `npm install` again in both `server` and `client` (new packages: express-rate-limit, express-async-errors, leaflet, flag-icons, react-icons).
