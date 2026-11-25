@@ -1,13 +1,19 @@
 const router = require('express').Router();
-const { nanoid } = require('nanoid');
+const { customAlphabet } = require('nanoid');
 const auth = require('../middleware/auth');
 const Link = require('../models/Link');
 const Click = require('../models/Click');
 
 router.use(auth);
 
-const RESERVED = ['api', 'track'];
-const withShort = (l) => ({ ...l.toObject(), shortUrl: `${process.env.BASE_URL}/${l.code}` });
+// short, lowercase codes without look-alike characters (no 0/o, 1/l/i) -> easy to read out loud and type
+const makeCode = customAlphabet('23456789abcdefghjkmnpqrstuvwxyz', 6);
+const RESERVED = ['api', 'track', 'login', 'register', 'dashboard', 'admin', 'robots.txt', 'favicon.ico'];
+const baseUrl = () => (process.env.BASE_URL || 'http://localhost:5000').replace(/\/+$/, '');
+const withShort = (l) => {
+  const shortUrl = `${baseUrl()}/${l.code}`;
+  return { ...l.toObject(), shortUrl, displayUrl: shortUrl.replace(/^https?:\/\//, '') };
+};
 const clampDelay = (v, fallback) => (Number.isFinite(Number(v)) && v !== '' && v !== null ? Math.min(10, Math.max(0, Number(v))) : fallback);
 const daysFromNow = (d) => new Date(Date.now() + Number(d) * 86400000);
 
@@ -21,11 +27,12 @@ router.post('/', async (req, res) => {
   } catch {
     return res.status(400).json({ error: 'Please enter a valid URL' });
   }
-  let code = nanoid(7);
+  let code = makeCode();
+  while (await Link.exists({ code })) code = makeCode(); // never reuse a code
   if (alias) {
     if (!/^[a-zA-Z0-9_-]{3,30}$/.test(alias) || RESERVED.includes(alias.toLowerCase()))
       return res.status(400).json({ error: 'Custom name: 3-30 letters, numbers, - or _' });
-    if (await Link.findOne({ code: alias })) return res.status(400).json({ error: 'That custom name is already taken' });
+    if (await Link.findOne({ code: new RegExp(`^${alias}$`, 'i') })) return res.status(400).json({ error: 'That custom name is already taken' });
     code = alias;
   }
   const link = await Link.create({
@@ -47,7 +54,7 @@ router.get('/overview/summary', async (req, res) => {
   const ids = (await Link.find({ owner: req.userId }).select('_id')).map((l) => l._id);
   const since = new Date(Date.now() - 30 * 86400000);
   const clicks = await Click.find({ link: { $in: ids }, createdAt: { $gte: since } })
-    .select('link country userAgent osName deviceType createdAt durationSec').sort({ createdAt: -1 }).limit(5000).lean();
+    .select('link ip country countryName city lat lon deviceType deviceVendor deviceModel osName osVersion browserName userAgent createdAt durationSec').sort({ createdAt: -1 }).limit(5000).lean();
   res.json({ clicks });
 });
 
@@ -72,9 +79,12 @@ router.get('/:id/stats', async (req, res) => {
   const totalTime = clicks.reduce((s, c) => s + (c.durationSec || 0), 0);
   const countries = {};
   clicks.forEach((c) => { const k = c.country || 'Unknown'; countries[k] = (countries[k] || 0) + 1; });
+  const uniqueVisitors = new Set(clicks.filter((c) => c.ip).map((c) => c.ip)).size;
   res.json({
     link: withShort(link),
     summary: {
+      uniqueVisitors,
+      lastClickAt: clicks[0]?.createdAt || null,
       totalClicks: link.clicks,
       totalTimeSec: Math.round(totalTime),
       avgTimeSec: clicks.length ? +(totalTime / clicks.length).toFixed(1) : 0,

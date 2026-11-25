@@ -1,5 +1,8 @@
 import { useState, useEffect } from 'react';
 import QRCode from 'qrcode';
+import { FaQrcode, FaArrowUpRightFromSquare, FaShareNodes } from 'react-icons/fa6';
+import { fmtTime, host, countryName, osOf, browserOf, timeAgo, deviceTypeLabel, osLabel, browserLabel, placeLabel,
+  Flag, Place, Device, DeviceLogo, OsLogo, BrowserLogo, ShortLink, VisitorMap } from './components.jsx';
 
 /* ---------- helpers ---------- */
 async function api(path, method = 'GET', body) {
@@ -13,47 +16,12 @@ async function api(path, method = 'GET', body) {
   if (!res.ok) throw new Error(data.error || 'Request failed');
   return data;
 }
-const fmtTime = (s) => (s >= 60 ? `${Math.floor(s / 60)}m ${Math.round(s % 60)}s` : `${Math.round(s)}s`);
-const host = (u) => { try { return new URL(u).hostname.replace('www.', ''); } catch { return u; } };
-const countryName = (c) => { try { return new Intl.DisplayNames(['en'], { type: 'region' }).of(c); } catch { return c; } };
-const osOf = (ua = '') => /android/i.test(ua) ? 'Android' : /iphone|ipad/i.test(ua) ? 'iOS' : /windows/i.test(ua) ? 'Windows' : /mac/i.test(ua) ? 'macOS' : /linux/i.test(ua) ? 'Linux' : 'Other';
-const browserOf = (ua = '') => /edg/i.test(ua) ? 'Edge' : /chrome/i.test(ua) ? 'Chrome' : /firefox/i.test(ua) ? 'Firefox' : /safari/i.test(ua) ? 'Safari' : 'Other';
 const countBy = (arr, fn) => {
   const m = {}; arr.forEach((x) => { const k = fn(x) || 'Unknown'; m[k] = (m[k] || 0) + 1; });
   return Object.entries(m).sort((a, b) => b[1] - a[1]);
 };
 const statusOf = (l) => (!l.active ? 'Disabled' : l.expiresAt && new Date(l.expiresAt) < new Date() ? 'Expired' : 'Active');
 const COLORS = ['#4f46e5', '#06b6d4', '#10b981', '#f59e0b', '#e5484d', '#8b5cf6'];
-
-// Device helpers using rich parsed fields
-const deviceIcon = (type) => {
-  if (!type || type === 'desktop') return '🖥️';
-  if (type === 'mobile') return '📱';
-  if (type === 'tablet') return '📟';
-  if (type === 'bot') return '🤖';
-  if (type === 'smarttv') return '📺';
-  return '💻';
-};
-const deviceLabel = (c) => {
-  if (c.deviceVendor && c.deviceModel) return `${c.deviceVendor} ${c.deviceModel}`;
-  if (c.deviceVendor) return c.deviceVendor;
-  if (c.osName) return c.osName;
-  return osOf(c.userAgent);
-};
-const osLabel = (c) => {
-  if (c.osName && c.osVersion) return `${c.osName} ${c.osVersion}`;
-  if (c.osName) return c.osName;
-  return osOf(c.userAgent);
-};
-const browserLabel = (c) => {
-  if (c.browserName && c.browserVersion) return `${c.browserName} ${c.browserVersion}`;
-  if (c.browserName) return c.browserName;
-  return browserOf(c.userAgent);
-};
-const deviceTypeLabel = (c) => {
-  const t = c.deviceType || 'desktop';
-  return t.charAt(0).toUpperCase() + t.slice(1);
-};
 
 
 /* ---------- small UI pieces ---------- */
@@ -113,12 +81,12 @@ function Donut({ rows }) {
   );
 }
 
-function Bars({ rows, label = (k) => k, empty = 'No data yet.' }) {
+function Bars({ rows, label = (k) => k, icon, empty = 'No data yet.' }) {
   if (!rows.length) return <p className="muted">{empty}</p>;
   const max = rows[0][1];
   return rows.slice(0, 6).map(([k, n]) => (
     <div className="bar-row" key={k}>
-      <span className="name" title={label(k)}>{label(k)}</span>
+      <span className="name" title={label(k)}>{icon && icon(k)}{label(k)}</span>
       <div className="track"><div className="fill" style={{ width: `${(n / max) * 100}%` }} /></div>
       <span>{n}</span>
     </div>
@@ -131,6 +99,68 @@ const RangeBox = ({ days, setDays }) => (
     <input type="range" min="7" max="30" value={days} onChange={(e) => setDays(+e.target.value)} aria-label="Number of days" />
   </div>
 );
+
+function HourChart({ clicks }) {
+  const counts = [...Array(24)].map((_, h) => clicks.filter((c) => new Date(c.createdAt).getHours() === h).length);
+  const max = Math.max(...counts, 1), W = 560, H = 120, bw = W / 24;
+  return (
+    <svg className="chart" viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Clicks by hour of day">
+      {counts.map((n, h) => {
+        const bh = (n / max) * (H - 30);
+        return (
+          <g key={h}>
+            <rect x={h * bw + 3} y={H - 18 - bh} width={bw - 6} height={Math.max(bh, 2)} rx="3" fill={n === max && n > 0 ? 'var(--mint)' : n ? 'var(--accent)' : 'var(--line)'}><title>{h}:00 – {h}:59 · {n} clicks</title></rect>
+            {h % 3 === 0 && <text x={h * bw + bw / 2} y={H - 4} textAnchor="middle">{h}h</text>}
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+const Row = ({ label, children }) => <div className="drow"><dt>{label}</dt><dd>{children}</dd></div>;
+
+/* ---------- one visitor, all the details ---------- */
+function ClickModal({ c, onClose, toast }) {
+  return (
+    <Modal onClose={onClose}>
+      <div className="mhead"><Flag code={c.country} size={30} /><div><h2>{placeLabel(c)}</h2><span className="muted">{c.countryName || (c.country ? countryName(c.country) : 'Location unknown')} · {new Date(c.createdAt).toLocaleString()}</span></div></div>
+      <div className="dgrid">
+        <div>
+          <h4>Visitor</h4>
+          <dl>
+            <Row label="IP address"><span className="ip-badge">{c.ip || '—'}</span>{c.isLocal && <span className="pill grey" title="This click came from the same computer as the server, so this network's public IP is shown." style={{ marginLeft: 6 }}>local test</span>}</Row>
+            <Row label="Country"><Flag code={c.country} /> {c.countryName || (c.country ? countryName(c.country) : '—')}</Row>
+            <Row label="City / region">{[c.city, c.region].filter(Boolean).join(', ') || '—'}</Row>
+            <Row label="Coordinates">{Number.isFinite(c.lat) ? <a href={`https://www.openstreetmap.org/?mlat=${c.lat}&mlon=${c.lon}#map=10/${c.lat}/${c.lon}`} target="_blank" rel="noreferrer">{c.lat.toFixed(3)}, {c.lon.toFixed(3)}</a> : '—'}</Row>
+            <Row label="Timezone">{c.timezone || '—'}</Row>
+            <Row label="Internet provider">{c.isp || '—'}</Row>
+            <Row label="Language">{c.language || '—'}</Row>
+          </dl>
+        </div>
+        <div>
+          <h4>Device</h4>
+          <dl>
+            <Row label="Device"><DeviceLogo c={c} /> {c.deviceVendor ? `${c.deviceVendor} ${c.deviceModel || ''}` : deviceTypeLabel(c)}</Row>
+            <Row label="Type">{deviceTypeLabel(c)}</Row>
+            <Row label="System"><OsLogo name={c.osName || osOf(c.userAgent)} /> {osLabel(c)}</Row>
+            <Row label="Browser"><BrowserLogo name={c.browserName || browserOf(c.userAgent)} /> {browserLabel(c)}</Row>
+          </dl>
+          <h4 style={{ marginTop: 16 }}>Visit</h4>
+          <dl>
+            <Row label="Time viewed">{fmtTime(c.durationSec)}</Row>
+            <Row label="Came from">{c.referrer ? host(c.referrer) : 'Direct'}</Row>
+          </dl>
+        </div>
+      </div>
+      {c.userAgent && <p className="ua">{c.userAgent}</p>}
+      <div className="foot">
+        {c.ip && <button className="btn plain" onClick={() => { navigator.clipboard.writeText(c.ip); toast('IP copied'); }}>Copy IP</button>}
+        <button className="btn" onClick={onClose}>Close</button>
+      </div>
+    </Modal>
+  );
+}
 
 const Globe = () => (
   <svg className="float" viewBox="0 0 220 160" width="100%" style={{ maxWidth: 340 }} role="img" aria-label="Globe with tracked clicks">
@@ -188,14 +218,17 @@ function Auth({ onLogin }) {
 }
 
 /* ---------- Overview ---------- */
-function Overview({ goLinks, openStats }) {
+function Overview({ goLinks, openStats, theme }) {
   const [links, setLinks] = useState(null);
   const [clicks, setClicks] = useState([]);
   const [days, setDays] = useState(14);
-  useEffect(() => {
+  const [live, setLive] = useState(true);
+  const load = () => {
     api('/links').then(setLinks);
     api('/links/overview/summary').then((d) => setClicks(d.clicks));
-  }, []);
+  };
+  useEffect(load, []);
+  useEffect(() => { if (!live) return; const t = setInterval(load, 8000); return () => clearInterval(t); }, [live]);
   if (!links) return <p className="muted">Loading…</p>;
   const total = links.reduce((s, l) => s + l.clicks, 0);
   const active = links.filter((l) => statusOf(l) === 'Active').length;
@@ -205,6 +238,10 @@ function Overview({ goLinks, openStats }) {
   const hello = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
   const topLinks = [...links].sort((a, b) => b.clicks - a.clicks).filter((l) => l.clicks > 0).slice(0, 5);
   const email = localStorage.getItem('email') || '';
+  const byId = Object.fromEntries(links.map((l) => [l._id, l]));
+  const countryRows = countBy(clicks, (c) => c.country);
+  const cityRows = countBy(clicks.filter((c) => c.city), (c) => `${c.city}|${c.country || ''}`);
+  const countryCount = countryRows.filter(([k]) => k !== 'Unknown').length;
 
   return (
     <>
@@ -212,7 +249,7 @@ function Overview({ goLinks, openStats }) {
       <div className="tiles">
         <div className="tile"><div className="ic i">🔗</div><div><div className="v">{links.length}</div><div className="l">Links created</div></div></div>
         <div className="tile"><div className="ic m">👆</div><div><div className="v">{total}</div><div className="l">Total clicks</div></div></div>
-        <div className="tile"><div className="ic a">✅</div><div><div className="v">{active}</div><div className="l">Active links</div></div></div>
+        <div className="tile"><div className="ic a">🌍</div><div><div className="v">{countryCount}</div><div className="l">Countries reached</div></div></div>
         <div className="tile"><div className="ic r">⏱️</div><div><div className="v">{fmtTime(avg)}</div><div className="l">Avg time viewed</div></div></div>
       </div>
       {links.length === 0 ? (
@@ -220,12 +257,31 @@ function Overview({ goLinks, openStats }) {
       ) : (
         <>
           <div className="panel">
+            <div className="top"><h3>Where your visitors are</h3><label className="livetoggle"><span className={'dot' + (live ? ' on' : '')} />Live<Switch checked={live} onChange={setLive} label="Live updates" /></label></div>
+            <VisitorMap clicks={clicks} theme={theme} />
+          </div>
+          <div className="cols eq">
+            <div className="panel">
+              <h3>Live activity</h3>
+              {clicks.length === 0 && <p className="muted">No clicks yet. Share a link and visits show up here.</p>}
+              {clicks.slice(0, 6).map((c) => (
+                <button className="feed" key={c._id} onClick={() => openStats(c.link)}>
+                  <Flag code={c.country} size={22} />
+                  <span className="grow"><b>{placeLabel(c)}</b><span className="sub">{byId[c.link]?.title || host(byId[c.link]?.originalUrl || '') || 'Link'}</span></span>
+                  <DeviceLogo c={c} />
+                  <span className="when">{timeAgo(c.createdAt)}</span>
+                </button>
+              ))}
+            </div>
+            <div className="panel"><h3>Top countries</h3><Bars rows={countryRows} icon={(k) => (k === 'Unknown' ? null : <Flag code={k} size={15} />)} label={(k) => (k === 'Unknown' ? 'Unknown' : countryName(k))} empty="No clicks yet." /></div>
+          </div>
+          <div className="panel">
             <div className="top"><h3>Clicks over time</h3><RangeBox days={days} setDays={setDays} /></div>
             <BarChart clicks={clicks} days={days} />
           </div>
           <div className="cols eq">
-            <div className="panel"><h3>Top countries</h3><Bars rows={countBy(clicks, (c) => c.country)} label={(k) => (k === 'Unknown' ? 'Unknown' : countryName(k))} empty="No clicks yet." /></div>
-            <div className="panel"><h3>Devices</h3><Donut rows={countBy(clicks, (c) => c.osName || osOf(c.userAgent))} /></div>
+            <div className="panel"><h3>Top cities</h3><Bars rows={cityRows} icon={(k) => <Flag code={k.split('|')[1]} size={15} />} label={(k) => k.split('|')[0]} empty="Cities appear after the first located click." /></div>
+            <div className="panel"><h3>Operating systems</h3><Donut rows={countBy(clicks, (c) => c.osName || osOf(c.userAgent))} /></div>
           </div>
           <div className="panel">
             <h3>Top links</h3>
@@ -233,7 +289,7 @@ function Overview({ goLinks, openStats }) {
             {topLinks.map((l) => (
               <div className="link first" key={l._id} style={{ padding: '10px 0' }}>
                 <div className="favi">{host(l.originalUrl)[0]}</div>
-                <div className="info"><b>{l.title || host(l.originalUrl)}</b><span className="orig">{l.shortUrl.replace(/^https?:\/\//, '')}</span></div>
+                <div className="info"><b>{l.title || host(l.originalUrl)}</b><span className="orig">{l.displayUrl}</span></div>
                 <div className="clicks">{l.clicks} clicks</div>
                 <button className="btn soft sm" onClick={() => openStats(l._id)}>Stats</button>
               </div>
@@ -302,6 +358,7 @@ function Links({ openStats, toast }) {
   const [error, setError] = useState('');
   const [q, setQ] = useState(''); const [sort, setSort] = useState('new'); const [filter, setFilter] = useState('All');
   const [manage, setManage] = useState(null);
+  const [created, setCreated] = useState(null);
 
   const load = () => api('/links').then(setLinks).catch((e) => setError(e.message));
   useEffect(() => { load(); }, []);
@@ -309,8 +366,8 @@ function Links({ openStats, toast }) {
   const create = async (e) => {
     e.preventDefault(); setError('');
     try {
-      await api('/links', 'POST', { url, title, alias, expiresInDays: exp, delaySec: delay });
-      setUrl(''); setTitle(''); setAlias(''); toast('Link shortened'); load();
+      const l = await api('/links', 'POST', { url, title, alias, expiresInDays: exp, delaySec: delay });
+      setUrl(''); setTitle(''); setAlias(''); setCreated(l); toast('Link shortened'); load();
     } catch (err) { setError(err.message); }
   };
   const remove = async (l) => { if (confirm('Delete this link and all its click data?')) { await api('/links/' + l._id, 'DELETE'); toast('Link deleted'); load(); } };
@@ -345,6 +402,21 @@ function Links({ openStats, toast }) {
         {error && <p className="err" style={{ marginTop: 10, marginBottom: 0 }}>{error}</p>}
       </form>
 
+      {created && (
+        <div className="panel success">
+          <div className="top"><h3>🎉 Your short link is ready</h3><button className="btn plain sm" onClick={() => setCreated(null)}>Dismiss</button></div>
+          <ShortLink link={created} toast={toast} big />
+          <div className="orig" style={{ margin: '6px 0 14px' }}>{created.originalUrl}</div>
+          <div className="row-actions">
+            <button className="btn sm" onClick={() => { navigator.clipboard.writeText(created.shortUrl); toast('Link copied'); }}>Copy link</button>
+            <a className="btn soft sm" href={created.shortUrl} target="_blank" rel="noreferrer"><FaArrowUpRightFromSquare size={12} /> Open</a>
+            <button className="btn soft sm" onClick={() => setManage(created)}><FaQrcode size={12} /> QR code</button>
+            {navigator.share && <button className="btn soft sm" onClick={() => navigator.share({ title: created.title || 'Link', url: created.shortUrl }).catch(() => {})}><FaShareNodes size={12} /> Share</button>}
+            <button className="btn soft sm" onClick={() => openStats(created._id)}>View stats</button>
+          </div>
+        </div>
+      )}
+
       <div className="panel">
         <div className="toolbar">
           <input className="field" placeholder="Search links" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search links" />
@@ -363,14 +435,13 @@ function Links({ openStats, toast }) {
               <div className="favi">{host(l.originalUrl)[0]}</div>
               <div className="info">
                 <b>{l.title || host(l.originalUrl)}</b>
-                <a href={l.shortUrl} target="_blank" rel="noreferrer">{l.shortUrl.replace(/^https?:\/\//, '')}</a>
+                <ShortLink link={l} toast={toast} />
                 <div className="orig">{l.originalUrl}</div>
               </div>
               <span className={'pill ' + (st === 'Active' ? 'green' : st === 'Expired' ? 'red' : 'grey')}>{st}</span>
               <div className="clicks">{l.clicks} {l.clicks === 1 ? 'click' : 'clicks'}</div>
               <div className="actions">
                 <Switch checked={l.active} onChange={(on) => toggle(l, on)} label={`Turn ${l.title || l.code} on or off`} />
-                <button className="btn plain sm" onClick={() => { navigator.clipboard.writeText(l.shortUrl); toast('Link copied'); }}>Copy</button>
                 <button className="btn plain sm" onClick={() => setManage(l)}>QR & edit</button>
                 <button className="btn soft sm" onClick={() => openStats(l._id)}>Stats</button>
                 <button className="btn plain sm warn" onClick={() => remove(l)}>Delete</button>
@@ -385,33 +456,28 @@ function Links({ openStats, toast }) {
 }
 
 /* ---------- Stats for one link ---------- */
-function Stats({ id, onBack, toast }) {
+function Stats({ id, onBack, toast, theme }) {
   const [data, setData] = useState(null);
   const [days, setDays] = useState(14);
+  const [live, setLive] = useState(false);
+  const [detail, setDetail] = useState(null);
+  const [q, setQ] = useState('');
+  const [dev, setDev] = useState('All');
   const load = () => api(`/links/${id}/stats`).then(setData);
   useEffect(() => { load(); }, [id]);
+  useEffect(() => { if (!live) return; const t = setInterval(load, 5000); return () => clearInterval(t); }, [live, id]);
   if (!data) return <p className="muted">Loading stats…</p>;
   const { link, summary, clicks } = data;
+  const last = clicks[0];
 
   const exportCsv = () => {
     const rows = [
-      ['When', 'IP Address', 'Country', 'Region', 'City', 'Timezone', 'Device Type', 'Device Vendor', 'Device Model', 'OS', 'OS Version', 'Browser', 'Browser Version', 'Seconds viewed', 'Referrer'],
+      ['When', 'IP Address', 'Country', 'Country code', 'Region', 'City', 'Latitude', 'Longitude', 'Timezone', 'ISP', 'Device Type', 'Device Vendor', 'Device Model', 'OS', 'OS Version', 'Browser', 'Browser Version', 'Seconds viewed', 'Referrer'],
       ...clicks.map((c) => [
-        new Date(c.createdAt).toISOString(),
-        c.ip || '',
-        c.country || '',
-        c.region || '',
-        c.city || '',
-        c.timezone || '',
-        c.deviceType || 'desktop',
-        c.deviceVendor || '',
-        c.deviceModel || '',
-        c.osName || osOf(c.userAgent),
-        c.osVersion || '',
-        c.browserName || browserOf(c.userAgent),
-        c.browserVersion || '',
-        c.durationSec || 0,
-        c.referrer || '',
+        new Date(c.createdAt).toISOString(), c.ip || '', c.countryName || '', c.country || '', c.region || '', c.city || '',
+        c.lat ?? '', c.lon ?? '', c.timezone || '', c.isp || '', c.deviceType || 'desktop', c.deviceVendor || '', c.deviceModel || '',
+        c.osName || osOf(c.userAgent), c.osVersion || '', c.browserName || browserOf(c.userAgent), c.browserVersion || '',
+        c.durationSec || 0, c.referrer || '',
       ]),
     ];
     const csv = rows.map((r) => r.map((v) => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')).join('\n');
@@ -420,26 +486,41 @@ function Stats({ id, onBack, toast }) {
     a.download = `clicks-${link.code}.csv`; a.click(); toast('CSV downloaded');
   };
 
+  const needle = q.trim().toLowerCase();
+  const rowsShown = clicks.filter((c) => (dev === 'All' || (c.deviceType || 'desktop') === dev) &&
+    (!needle || [c.ip, c.city, c.region, c.countryName, c.country, c.deviceVendor, c.deviceModel, c.osName, c.browserName, c.isp].join(' ').toLowerCase().includes(needle)));
+  const types = ['All', ...new Set(clicks.map((c) => c.deviceType || 'desktop'))];
+  const cityRows = countBy(clicks.filter((c) => c.city), (c) => `${c.city}|${c.country || ''}`);
+
   return (
     <>
       <button className="btn plain back" onClick={onBack}>‹ Back</button>
       <div className="head-row">
         <div>
           <h1>{link.title || host(link.originalUrl)}</h1>
-          <a href={link.shortUrl} target="_blank" rel="noreferrer">{link.shortUrl.replace(/^https?:\/\//, '')}</a>
-          <span className="muted"> → {host(link.originalUrl)}</span>
+          <ShortLink link={link} toast={toast} big />
+          <div className="muted" style={{ marginTop: 4 }}>→ {link.originalUrl}</div>
         </div>
-        <div>
-          <button className="btn soft sm" onClick={() => { navigator.clipboard.writeText(link.shortUrl); toast('Link copied'); }}>Copy link</button>{' '}
+        <div className="head-actions">
+          <label className="livetoggle"><span className={'dot' + (live ? ' on' : '')} />Live<Switch checked={live} onChange={setLive} label="Live updates" /></label>
           <button className="btn soft sm" onClick={exportCsv} disabled={!clicks.length}>Export CSV</button>{' '}
           <button className="btn sm" onClick={() => { load(); toast('Stats refreshed'); }}>Refresh</button>
         </div>
       </div>
 
-      <div className="tiles three">
+      <div className="tiles">
         <div className="tile"><div className="ic i">👆</div><div><div className="v">{summary.totalClicks}</div><div className="l">Total clicks</div></div></div>
+        <div className="tile"><div className="ic a">👤</div><div><div className="v">{summary.uniqueVisitors}</div><div className="l">Unique visitors</div></div></div>
         <div className="tile"><div className="ic m">⏱️</div><div><div className="v">{fmtTime(summary.totalTimeSec)}</div><div className="l">Total time viewed</div></div></div>
-        <div className="tile"><div className="ic a">📊</div><div><div className="v">{fmtTime(summary.avgTimeSec)}</div><div className="l">Average per visit</div></div></div>
+        <div className="tile"><div className="ic r">📊</div><div><div className="v">{fmtTime(summary.avgTimeSec)}</div><div className="l">Average per visit</div></div></div>
+      </div>
+      {last && (
+        <div className="lastbar"><span className="dot on" /> Last click <b>{timeAgo(last.createdAt)}</b> from <Flag code={last.country} /> <b>{placeLabel(last)}</b> on <DeviceLogo c={last} size={16} /> {osLabel(last)}</div>
+      )}
+
+      <div className="panel">
+        <div className="top"><h3>Visitor map</h3><span className="muted" style={{ fontSize: 13 }}>Click a circle for details</span></div>
+        <VisitorMap clicks={clicks} theme={theme} />
       </div>
 
       <div className="panel">
@@ -448,65 +529,53 @@ function Stats({ id, onBack, toast }) {
       </div>
 
       <div className="cols three">
-        <div className="panel"><h3>Where clicks come from</h3><Bars rows={countBy(clicks, (c) => c.country)} label={(k) => (k === 'Unknown' ? 'Unknown' : countryName(k))} empty="No clicks yet." /></div>
-        <div className="panel"><h3>OS breakdown</h3><Donut rows={countBy(clicks, (c) => c.osName || osOf(c.userAgent))} /></div>
-        <div className="panel"><h3>Browsers</h3><Bars rows={countBy(clicks, (c) => c.browserName || browserOf(c.userAgent))} /></div>
-        <div className="panel"><h3>Device types</h3><Bars rows={countBy(clicks, (c) => deviceTypeLabel(c))} /></div>
-        <div className="panel"><h3>Devices / Brands</h3><Bars rows={countBy(clicks, (c) => c.deviceVendor || (c.osName || osOf(c.userAgent)))} /></div>
+        <div className="panel"><h3>Countries</h3><Bars rows={countBy(clicks, (c) => c.country)} icon={(k) => (k === 'Unknown' ? null : <Flag code={k} size={15} />)} label={(k) => (k === 'Unknown' ? 'Unknown' : countryName(k))} empty="No clicks yet." /></div>
+        <div className="panel"><h3>Cities</h3><Bars rows={cityRows} icon={(k) => <Flag code={k.split('|')[1]} size={15} />} label={(k) => k.split('|')[0]} empty="No city data yet." /></div>
+        <div className="panel"><h3>Operating systems</h3><Donut rows={countBy(clicks, (c) => c.osName || osOf(c.userAgent))} /></div>
+        <div className="panel"><h3>Browsers</h3><Bars rows={countBy(clicks, (c) => c.browserName || browserOf(c.userAgent))} icon={(k) => <BrowserLogo name={k} size={15} />} /></div>
+        <div className="panel"><h3>Device brands</h3><Bars rows={countBy(clicks, (c) => c.deviceVendor || (c.osName || osOf(c.userAgent)))} icon={(k) => <OsLogo name={k} size={15} />} /></div>
         <div className="panel"><h3>Traffic sources</h3><Bars rows={countBy(clicks, (c) => (c.referrer ? host(c.referrer) : 'Direct'))} /></div>
       </div>
 
       <div className="panel">
-        <h3>Recent clicks</h3>
+        <div className="top"><h3>Busiest hours <span className="muted" style={{ fontWeight: 400, fontSize: 13 }}>(your local time)</span></h3></div>
+        <HourChart clicks={clicks} />
+      </div>
+
+      <div className="panel">
+        <div className="top">
+          <h3>Recent clicks</h3>
+          <div className="toolbar" style={{ margin: 0 }}>
+            <input className="field" placeholder="Search IP, city, country, device…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search clicks" />
+            <div className="chips">{types.map((t) => <button key={t} className={dev === t ? 'on' : ''} onClick={() => setDev(t)}>{t === 'All' ? 'All' : t.charAt(0).toUpperCase() + t.slice(1)}</button>)}</div>
+          </div>
+        </div>
         {clicks.length === 0 ? (
           <div className="empty"><div style={{ fontSize: 40 }}>📭</div><b>No clicks yet</b>Share your short link and visits will appear here.</div>
         ) : (
           <div className="tbl-wrap">
             <table>
-              <thead>
-                <tr>
-                  <th>When</th>
-                  <th>IP Address</th>
-                  <th>Location</th>
-                  <th>Device</th>
-                  <th>OS</th>
-                  <th>Browser</th>
-                  <th>Time viewed</th>
-                  <th>Came from</th>
-                </tr>
-              </thead>
+              <thead><tr><th>When</th><th>IP address</th><th>Location</th><th>Device</th><th>OS</th><th>Browser</th><th>Time viewed</th><th>Came from</th></tr></thead>
               <tbody>
-                {clicks.slice(0, 100).map((c) => (
-                  <tr key={c._id}>
-                    <td style={{ whiteSpace: 'nowrap' }}>{new Date(c.createdAt).toLocaleString()}</td>
-                    <td>
-                      <span className="ip-badge">{c.ip || '—'}</span>
-                    </td>
-                    <td>
-                      {c.country && <span className="cc">{c.country}</span>}
-                      {[c.city, c.region].filter(Boolean).join(', ') || (c.country ? countryName(c.country) : 'Unknown')}
-                      {c.timezone && <span className="tz-badge" title="Timezone">{c.timezone}</span>}
-                    </td>
-                    <td>
-                      <span className="device-cell">
-                        <span className="device-icon">{deviceIcon(c.deviceType)}</span>
-                        <span>
-                          <span className="device-name">{deviceLabel(c)}</span>
-                          <span className="device-type-pill">{deviceTypeLabel(c)}</span>
-                        </span>
-                      </span>
-                    </td>
-                    <td>{osLabel(c)}</td>
-                    <td>{browserLabel(c)}</td>
+                {rowsShown.slice(0, 100).map((c) => (
+                  <tr key={c._id} className="clickable" onClick={() => setDetail(c)} title="Click for full details">
+                    <td style={{ whiteSpace: 'nowrap' }}>{new Date(c.createdAt).toLocaleString()}<span className="sub">{timeAgo(c.createdAt)}</span></td>
+                    <td><span className="ip-badge">{c.ip || '—'}</span>{c.isLocal && <span className="tz-badge" title="Opened from the same computer as the server; this network's public IP is shown">local test</span>}</td>
+                    <td><Place c={c} />{c.timezone && <span className="tz-badge" title="Timezone">{c.timezone}</span>}</td>
+                    <td><Device c={c} /></td>
+                    <td><span className="device-cell"><OsLogo name={c.osName || osOf(c.userAgent)} />{osLabel(c)}</span></td>
+                    <td><span className="device-cell"><BrowserLogo name={c.browserName || browserOf(c.userAgent)} />{browserLabel(c)}</span></td>
                     <td>{fmtTime(c.durationSec)}</td>
                     <td>{c.referrer ? host(c.referrer) : <span className="muted">Direct</span>}</td>
                   </tr>
                 ))}
+                {rowsShown.length === 0 && <tr><td colSpan="8" className="muted" style={{ textAlign: 'center' }}>No clicks match your search.</td></tr>}
               </tbody>
             </table>
           </div>
         )}
       </div>
+      {detail && <ClickModal c={detail} onClose={() => setDetail(null)} toast={toast} />}
     </>
   );
 }
@@ -541,9 +610,9 @@ export default function App() {
         </div>
       </aside>
       <main className="main">
-        {page === 'overview' && <Overview goLinks={() => setPage('links')} openStats={openStats} />}
+        {page === 'overview' && <Overview goLinks={() => setPage('links')} openStats={openStats} theme={theme} />}
         {page === 'links' && <Links openStats={openStats} toast={toast} />}
-        {page === 'stats' && <Stats id={statsId} onBack={() => setPage('links')} toast={toast} />}
+        {page === 'stats' && <Stats id={statsId} onBack={() => setPage('links')} toast={toast} theme={theme} />}
       </main>
       <div className="bottom">{nav.map(([k, ic, name]) => <button key={k} className={page === k ? 'on' : ''} onClick={() => setPage(k)}>{ic}<br />{name}</button>)}</div>
       {msg && <div className="toast" role="status">{msg}</div>}

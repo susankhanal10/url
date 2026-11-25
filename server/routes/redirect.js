@@ -1,13 +1,12 @@
 const router = require('express').Router();
-const geoip = require('geoip-lite');
 const { UAParser } = require('ua-parser-js');
 const Link = require('../models/Link');
 const Click = require('../models/Click');
+const { clientIp, isPrivate, getPublicIp, lookupGeo } = require('../utils/geo');
+const { messagePage, redirectPage } = require('../utils/pages');
 
-const page = (body) => `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>LinkTrack</title>
-<style>body{font-family:system-ui;display:grid;place-items:center;height:100vh;margin:0;background:#0f172a;color:#fff;text-align:center}
-.s{width:40px;height:40px;border:4px solid #334155;border-top-color:#38bdf8;border-radius:50%;animation:r 1s linear infinite;margin:0 auto 16px}
-@keyframes r{to{transform:rotate(360deg)}}</style></head><body>${body}</body></html>`;
+router.get('/robots.txt', (req, res) => res.type('text/plain').send('User-agent: *\nDisallow: /\n'));
+router.get('/favicon.ico', (req, res) => res.sendStatus(204));
 
 // beacon: visitor's browser reports how long it stayed on the page
 router.post('/track/:id', async (req, res) => {
@@ -16,64 +15,64 @@ router.post('/track/:id', async (req, res) => {
   res.sendStatus(204);
 });
 
+// Fill in country / city / coordinates / ISP AFTER the visitor was already redirected, so geolocation never slows the link down.
+async function enrichClick(clickId, ip) {
+  try {
+    const local = isPrivate(ip);
+    const lookupIp = local ? await getPublicIp() : ip; // localhost -> use this network's public IP
+    if (!lookupIp) return;
+    const g = await lookupGeo(lookupIp);
+    const update = { ip: lookupIp, isLocal: local };
+    if (g) {
+      Object.assign(update, {
+        country: g.country, countryName: g.countryName, region: g.region, city: g.city,
+        lat: g.lat, lon: g.lon, timezone: g.timezone, isp: g.isp,
+      });
+    }
+    await Click.updateOne({ _id: clickId }, update);
+  } catch (e) { console.error('geo enrich failed:', e.message); }
+}
+
 // the short link itself
 router.get('/:code', async (req, res) => {
+  res.set({ 'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex' });
   const link = await Link.findOne({ code: req.params.code });
-  if (!link) return res.status(404).send(page('<div><h2>Link not found</h2><p>Check the address and try again.</p></div>'));
+  if (!link) return res.status(404).send(messagePage('🔍', 'Link not found', 'This short link does not exist. Please check the address and try again.'));
   if (!link.active || (link.expiresAt && link.expiresAt < new Date()))
-    return res.status(410).send(page('<div><h2>This link is no longer available</h2><p>The owner has turned it off or it has expired.</p></div>'));
+    return res.status(410).send(messagePage('⏳', 'This link is no longer available', 'The owner has turned it off or it has expired.'));
 
-  const ip = (req.ip || '').replace('::ffff:', '');
-  const geo = geoip.lookup(ip) || {};
-
-  // Deep parse the User-Agent
+  const ip = clientIp(req);
   const ua = req.headers['user-agent'] || '';
-  const parser = new UAParser(ua);
-  const parsed = parser.getResult();
+  const parsed = new UAParser(ua).getResult();
 
-  // Determine device type
   let deviceType = 'desktop';
-  if (parsed.device && parsed.device.type) {
-    deviceType = parsed.device.type; // 'mobile', 'tablet', 'smarttv', etc.
-  } else if (/bot|crawl|spider|slurp|mediapartners/i.test(ua)) {
-    deviceType = 'bot';
-  }
+  if (parsed.device?.type) deviceType = parsed.device.type;
+  else if (/bot|crawl|spider|slurp|mediapartners|preview/i.test(ua)) deviceType = 'bot';
 
   const click = await Click.create({
     link: link._id,
     ip,
-    country: geo.country,
-    region: geo.region,
-    city: geo.city,
-    timezone: geo.timezone,
-    // Device details
+    isLocal: isPrivate(ip),
     deviceType,
     deviceVendor: parsed.device?.vendor || null,
     deviceModel: parsed.device?.model || null,
-    // OS details
     osName: parsed.os?.name || null,
     osVersion: parsed.os?.version || null,
-    // Browser details
     browserName: parsed.browser?.name || null,
     browserVersion: parsed.browser?.version ? parsed.browser.version.split('.')[0] : null,
     userAgent: ua,
+    language: (req.headers['accept-language'] || '').split(',')[0] || null,
     referrer: req.headers.referer,
   });
   await Link.updateOne({ _id: link._id }, { $inc: { clicks: 1 } });
+  enrichClick(click._id, ip); // runs in the background
 
-  const delay = (link.delaySec ?? 2) * 1000;
-  if (delay === 0) return res.redirect(link.originalUrl); // instant redirect, no time-viewed data
+  const delaySec = link.delaySec ?? 2;
+  if (delaySec === 0) return res.redirect(link.originalUrl); // instant redirect, no time-viewed data
 
-  const safeUrl = JSON.stringify(link.originalUrl).replace(/</g, '\\u003c');
-  res.send(page(`<div><div class="s"></div><p>Taking you to your destination...</p></div>
-<script>
-const start=Date.now(), target=${safeUrl}, id="${click._id}";
-let sent=false;
-function report(){ if(sent) return; sent=true;
-  navigator.sendBeacon("/track/"+id, new Blob([JSON.stringify({seconds:(Date.now()-start)/1000})],{type:"application/json"})); }
-window.addEventListener("pagehide", report);
-setTimeout(()=>{ report(); location.href=target; }, ${delay});
-</script>`));
+  let host = link.originalUrl;
+  try { host = new URL(link.originalUrl).hostname.replace(/^www\./, ''); } catch { /* keep raw */ }
+  res.send(redirectPage({ url: link.originalUrl, host, delaySec, clickId: click._id }));
 });
 
 module.exports = router;
